@@ -13,10 +13,8 @@ SHEET_NAME = "raw_data"
 
 METRICS = [
     "reach",
-    "accounts_engaged",
     "follower_count",
 ]
-
 # --- Google Sheets 認証 ---
 def get_sheet():
     creds_json = os.environ["GOOGLE_CREDENTIALS"]
