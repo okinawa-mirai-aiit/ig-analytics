@@ -11,6 +11,14 @@ ACCESS_TOKEN = os.environ["IG_PAGE_ACCESS_TOKEN"]
 SPREADSHEET_ID = "1SaVKe_sk7KAdjJlA0MEL7K71WnFEQ-i4Z85npcBzbzM"
 SHEET_NAME = "raw_data"
 
+METRICS = [
+    "reach",
+    "impressions",
+    "accounts_engaged",
+    "follower_count",
+    "website_clicks",
+]
+
 # --- Google Sheets 認証 ---
 def get_sheet():
     creds_json = os.environ["GOOGLE_CREDENTIALS"]
@@ -24,7 +32,7 @@ def get_sheet():
 def fetch_insights():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/insights"
     params = {
-        "metric": "reach,follower_count",
+        "metric": ",".join(METRICS),
         "period": "day",
         "access_token": ACCESS_TOKEN,
     }
@@ -32,7 +40,7 @@ def fetch_insights():
     res.raise_for_status()
     return res.json()["data"]
 
-# --- フォロワー数取得 ---
+# --- フォロワー総数取得 ---
 def fetch_followers():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}"
     params = {
@@ -45,11 +53,17 @@ def fetch_followers():
 
 # --- スプレッドシートに書き込み ---
 def write_to_sheet(sheet, rows):
-    # ヘッダーがなければ追加
     existing = sheet.get_all_values()
     if not existing:
-        sheet.append_row(["date", "reach", "follower_count_delta", "followers_total"])
-
+        sheet.append_row([
+            "date",
+            "reach / リーチ数",
+            "impressions / インプレッション数",
+            "accounts_engaged / エンゲージメント数",
+            "follower_count_delta / フォロワー増減",
+            "website_clicks / サイトクリック数",
+            "followers_total / フォロワー総数",
+        ])
     for row in rows:
         sheet.append_row(row)
     print(f"{len(rows)}行を書き込みました")
@@ -60,27 +74,30 @@ def main():
     insights = fetch_insights()
     followers_total = fetch_followers()
 
-    # insightsからreach・follower_countを取り出す
-    reach_data = {}
-    follower_delta_data = {}
-
+    # 指標ごとにデータを整理
+    data_by_date = {}
     for metric in insights:
         name = metric["name"]
         for entry in metric["values"]:
-            date_str = entry["end_time"][:10]  # YYYY-MM-DD
-            if name == "reach":
-                reach_data[date_str] = entry["value"]
-            elif name == "follower_count":
-                follower_delta_data[date_str] = entry["value"]
+            date_str = entry["end_time"][:10]
+            if date_str not in data_by_date:
+                data_by_date[date_str] = {}
+            data_by_date[date_str][name] = entry["value"]
 
-    # 日付をまとめてrows作成（直近2日分）
     rows = []
-    for date_str in sorted(reach_data.keys()):
-        reach = reach_data.get(date_str, 0)
-        delta = follower_delta_data.get(date_str, 0)
-        # 最新日のみ followers_total を記録
-        total = followers_total if date_str == sorted(reach_data.keys())[-1] else ""
-        rows.append([date_str, reach, delta, total])
+    sorted_dates = sorted(data_by_date.keys())
+    for date_str in sorted_dates:
+        d = data_by_date[date_str]
+        total = followers_total if date_str == sorted_dates[-1] else ""
+        rows.append([
+            date_str,
+            d.get("reach", ""),
+            d.get("impressions", ""),
+            d.get("accounts_engaged", ""),
+            d.get("follower_count", ""),
+            d.get("website_clicks", ""),
+            total,
+        ])
 
     write_to_sheet(sheet, rows)
 
