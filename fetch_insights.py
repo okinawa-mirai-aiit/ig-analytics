@@ -73,7 +73,7 @@ def main():
 
 # ヘッダーがなければ追加
     existing = sheet.get_all_values()
-    if not existing or existing[0][0] != "date / 日付":
+    if not existing or not existing[0] or existing[0][0] != "date / 日付":
         sheet.insert_row(HEADERS, 1)
 
     # 日付ごとに1行ずつ書き込み
