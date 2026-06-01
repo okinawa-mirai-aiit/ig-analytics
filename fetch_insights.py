@@ -71,10 +71,10 @@ def main():
 
     sorted_dates = sorted(data_by_date.keys())
 
-    # ヘッダーがなければ追加
+# ヘッダーがなければ追加
     existing = sheet.get_all_values()
-    if not existing:
-        sheet.append_row(HEADERS)
+    if not existing or existing[0][0] != "date / 日付":
+        sheet.insert_row(HEADERS, 1)
 
     # 日付ごとに1行ずつ書き込み
     for date_str in sorted_dates:
