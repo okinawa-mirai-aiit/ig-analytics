@@ -13,10 +13,8 @@ SHEET_NAME = "raw_data"
 
 METRICS = [
     "reach",
-    "impressions",
     "accounts_engaged",
     "follower_count",
-    "website_clicks",
 ]
 
 # --- Google Sheets 認証 ---
