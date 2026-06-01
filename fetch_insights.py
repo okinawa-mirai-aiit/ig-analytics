@@ -2,7 +2,6 @@ import os
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timezone, timedelta
 import json
 
 # --- 設定 ---
@@ -15,10 +14,17 @@ METRICS = [
     "reach",
     "follower_count",
 ]
+
+HEADERS = [
+    "date / 日付",
+    "reach / リーチ数",
+    "follower_count_delta / フォロワー増減",
+    "followers_total / フォロワー総数",
+]
+
 # --- Google Sheets 認証 ---
 def get_sheet():
-    creds_json = os.environ["GOOGLE_CREDENTIALS"]
-    creds_dict = json.loads(creds_json)
+    creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
@@ -47,30 +53,13 @@ def fetch_followers():
     res.raise_for_status()
     return res.json()["followers_count"]
 
-# --- スプレッドシートに書き込み ---
-def write_to_sheet(sheet, rows):
-    existing = sheet.get_all_values()
-    if not existing:
-        sheet.append_row([
-            "date",
-            "reach / リーチ数",
-            "impressions / インプレッション数",
-            "accounts_engaged / エンゲージメント数",
-            "follower_count_delta / フォロワー増減",
-            "website_clicks / サイトクリック数",
-            "followers_total / フォロワー総数",
-        ])
-    for row in rows:
-        sheet.append_row(row)
-    print(f"{len(rows)}行を書き込みました")
-
 # --- メイン処理 ---
 def main():
     sheet = get_sheet()
     insights = fetch_insights()
     followers_total = fetch_followers()
 
-    # 指標ごとにデータを整理
+    # 指標ごとにdate→valueの辞書を作成
     data_by_date = {}
     for metric in insights:
         name = metric["name"]
@@ -80,22 +69,27 @@ def main():
                 data_by_date[date_str] = {}
             data_by_date[date_str][name] = entry["value"]
 
-    rows = []
     sorted_dates = sorted(data_by_date.keys())
+
+    # ヘッダーがなければ追加
+    existing = sheet.get_all_values()
+    if not existing:
+        sheet.append_row(HEADERS)
+
+    # 日付ごとに1行ずつ書き込み
     for date_str in sorted_dates:
         d = data_by_date[date_str]
         total = followers_total if date_str == sorted_dates[-1] else ""
-        rows.append([
+        row = [
             date_str,
             d.get("reach", ""),
-            d.get("impressions", ""),
-            d.get("accounts_engaged", ""),
             d.get("follower_count", ""),
-            d.get("website_clicks", ""),
             total,
-        ])
+        ]
+        sheet.append_row(row)
+        print(f"{date_str}: {row}")
 
-    write_to_sheet(sheet, rows)
+    print(f"合計 {len(sorted_dates)} 行を書き込みました")
 
 if __name__ == "__main__":
     main()
