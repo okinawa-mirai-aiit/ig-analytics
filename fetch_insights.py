@@ -43,10 +43,10 @@ def get_spreadsheet():
 def fetch_account_insights():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/insights"
 
-    # 過去2日分を since/until で明示（v22+ の period=day では必須）
+    # 過去7日分を since/until で明示
     now = datetime.now(timezone.utc)
     until_ts = int(now.timestamp())
-    since_ts = int((now - timedelta(days=2)).timestamp())
+    since_ts = int((now - timedelta(days=7)).timestamp())
 
     params = {
         "metric": ",".join(ACCOUNT_METRICS),
@@ -57,10 +57,8 @@ def fetch_account_insights():
     }
     res = requests.get(url, params=params)
     print(f"[DEBUG] account insights status: {res.status_code}")
-    print(f"[DEBUG] account insights response: {res.text[:800]}")
     res.raise_for_status()
     return res.json().get("data", [])
-
 # --- フォロワー総数取得 ---
 def fetch_followers():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}"
@@ -104,11 +102,9 @@ def write_account_data(sheet, followers_total):
 
     for metric in insights:
         name = metric["name"]
-        # 新フォーマット: total_value
         if "total_value" in metric:
             today_str = datetime.now(timezone.utc).date().isoformat()
             data_by_date.setdefault(today_str, {})[name] = metric["total_value"].get("value", 0)
-        # 旧フォーマット: values 配列
         elif "values" in metric:
             for entry in metric["values"]:
                 date_str = entry.get("end_time", "")[:10]
@@ -121,25 +117,35 @@ def write_account_data(sheet, followers_total):
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "date / 日付":
         sheet.insert_row(ACCOUNT_HEADERS, 1)
-        existing_dates = set()
+        existing_rows = {}
     else:
-        existing_dates = {row[0] for row in existing[1:] if row and row[0]}
+        # 日付 → 行番号のマップ
+        existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
 
     sorted_dates = sorted(data_by_date.keys())
-    written = 0
+    new_count = 0
+    update_count = 0
+
     for date_str in sorted_dates:
-        if date_str in existing_dates:
-            continue  # 既に書き込み済みの日付はスキップ
         d = data_by_date[date_str]
         total = followers_total if date_str == sorted_dates[-1] else ""
-        sheet.append_row([
+        row_data = [
             date_str,
             d.get("reach", ""),
             d.get("follower_count", ""),
             total,
-        ])
-        written += 1
-    print(f"アカウントデータ: {written}行を新規書き込み(既存{len(existing_dates)}日分はスキップ)")
+        ]
+        if date_str in existing_rows:
+            # 既存行を最新値で上書き
+            row_num = existing_rows[date_str]
+            sheet.update(f"A{row_num}:D{row_num}", [row_data])
+            update_count += 1
+        else:
+            # 新規追加
+            sheet.append_row(row_data)
+            new_count += 1
+
+    print(f"アカウントデータ: 新規{new_count}行 / 更新{update_count}行")
 
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
@@ -148,16 +154,16 @@ def write_post_data(sheet, followers_total):
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "post_id / 投稿ID":
         sheet.insert_row(POST_HEADERS, 1)
-        existing_ids = set()
+        existing_rows = {}
     else:
-        existing_ids = {row[0] for row in existing[1:] if row}
+        # post_id → 行番号のマップ
+        existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
 
     new_count = 0
+    update_count = 0
+
     for media in media_list:
         media_id = media["id"]
-        if media_id in existing_ids:
-            continue
-
         media_type = media.get("media_type", "")
         insights = fetch_media_insights(media_id, media_type)
 
@@ -166,6 +172,7 @@ def write_post_data(sheet, followers_total):
         reach = insights.get("reach", 0)
         saved = insights.get("saved", 0)
 
+        # エンゲージメント率 = (いいね + コメント + 保存) / フォロワー総数 × 100
         if followers_total > 0:
             engagement_rate = round(
                 (like_count + comments_count + saved) / followers_total * 100, 2
@@ -175,7 +182,7 @@ def write_post_data(sheet, followers_total):
 
         caption = media.get("caption", "")[:50] if media.get("caption") else ""
 
-        sheet.append_row([
+        row_data = [
             media_id,
             media.get("timestamp", "")[:19].replace("T", " "),
             media_type,
@@ -185,11 +192,19 @@ def write_post_data(sheet, followers_total):
             reach,
             saved,
             engagement_rate,
-        ])
-        new_count += 1
+        ]
 
-    print(f"投稿データ: {new_count}件を書き込み(既存{len(existing_ids)}件はスキップ)")
+        if media_id in existing_rows:
+            # 既存投稿の指標を最新値で上書き
+            row_num = existing_rows[media_id]
+            sheet.update(f"A{row_num}:I{row_num}", [row_data])
+            update_count += 1
+        else:
+            # 新規投稿を追加
+            sheet.append_row(row_data)
+            new_count += 1
 
+    print(f"投稿データ: 新規{new_count}件 / 更新{update_count}件")
 # --- メイン処理 ---
 def main():
     spreadsheet = get_spreadsheet()
