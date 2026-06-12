@@ -230,6 +230,7 @@ def fetch_tagged_media():
         print(f"[DEBUG] tagged #{i+1} {m.get('timestamp')} | {m.get('media_type')} | {m.get('id')}")
     return data
 # --- メイン処理 ---
+# --- メイン処理 ---
 def main():
     spreadsheet = get_spreadsheet()
     raw_sheet = spreadsheet.worksheet("raw_data")
@@ -242,3 +243,6 @@ def main():
     print("=" * 50)
     print("=== タグ付け投稿の取得テスト ===")
     fetch_tagged_media()
+
+if __name__ == "__main__":
+    main()
