@@ -77,7 +77,14 @@ def fetch_media_list():
     }
     res = requests.get(url, params=params)
     res.raise_for_status()
-    return res.json().get("data", [])
+    data = res.json().get("data", [])
+
+    # ▼ 診断用: APIが返した最新5件を表示
+    print(f"[DEBUG] media count returned: {len(data)}")
+    for i, m in enumerate(data[:5]):
+        print(f"[DEBUG] #{i+1} {m.get('timestamp')} | {m.get('media_type')} | {m.get('id')}")
+
+    return data
 
 # --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
