@@ -2,6 +2,7 @@ import os
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timezone, timedelta
 import json
 
 # --- 設定 ---
@@ -22,7 +23,7 @@ POST_HEADERS = [
     "post_id / 投稿ID",
     "timestamp / 投稿日時",
     "media_type / 投稿タイプ",
-    "caption / キャプション（先頭50文字）",
+    "caption / キャプション(先頭50文字)",
     "like_count / いいね数",
     "comments_count / コメント数",
     "reach / リーチ数",
@@ -41,14 +42,24 @@ def get_spreadsheet():
 # --- アカウントインサイト取得 ---
 def fetch_account_insights():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/insights"
+
+    # 過去2日分を since/until で明示（v22+ の period=day では必須）
+    now = datetime.now(timezone.utc)
+    until_ts = int(now.timestamp())
+    since_ts = int((now - timedelta(days=2)).timestamp())
+
     params = {
         "metric": ",".join(ACCOUNT_METRICS),
         "period": "day",
+        "since": since_ts,
+        "until": until_ts,
         "access_token": ACCESS_TOKEN,
     }
     res = requests.get(url, params=params)
+    print(f"[DEBUG] account insights status: {res.status_code}")
+    print(f"[DEBUG] account insights response: {res.text[:800]}")
     res.raise_for_status()
-    return res.json()["data"]
+    return res.json().get("data", [])
 
 # --- フォロワー総数取得 ---
 def fetch_followers():
@@ -70,10 +81,10 @@ def fetch_media_list():
     res.raise_for_status()
     return res.json().get("data", [])
 
-# --- 投稿インサイト取得（reach・saved）---
+# --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
     url = f"https://graph.facebook.com/v25.0/{media_id}/insights"
-    if media_type == "VIDEO" or media_type == "REELS":
+    if media_type in ("VIDEO", "REELS"):
         metrics = "reach,saved,plays"
     else:
         metrics = "reach,saved"
@@ -90,20 +101,35 @@ def fetch_media_insights(media_id, media_type):
 def write_account_data(sheet, followers_total):
     insights = fetch_account_insights()
     data_by_date = {}
+
     for metric in insights:
         name = metric["name"]
-        for entry in metric["values"]:
-            date_str = entry["end_time"][:10]
-            if date_str not in data_by_date:
-                data_by_date[date_str] = {}
-            data_by_date[date_str][name] = entry["value"]
+        # 新フォーマット: total_value
+        if "total_value" in metric:
+            today_str = datetime.now(timezone.utc).date().isoformat()
+            data_by_date.setdefault(today_str, {})[name] = metric["total_value"].get("value", 0)
+        # 旧フォーマット: values 配列
+        elif "values" in metric:
+            for entry in metric["values"]:
+                date_str = entry.get("end_time", "")[:10]
+                if not date_str:
+                    continue
+                data_by_date.setdefault(date_str, {})[name] = entry.get("value", 0)
+
+    print(f"[DEBUG] data_by_date: {data_by_date}")
 
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "date / 日付":
         sheet.insert_row(ACCOUNT_HEADERS, 1)
+        existing_dates = set()
+    else:
+        existing_dates = {row[0] for row in existing[1:] if row and row[0]}
 
     sorted_dates = sorted(data_by_date.keys())
+    written = 0
     for date_str in sorted_dates:
+        if date_str in existing_dates:
+            continue  # 既に書き込み済みの日付はスキップ
         d = data_by_date[date_str]
         total = followers_total if date_str == sorted_dates[-1] else ""
         sheet.append_row([
@@ -112,13 +138,13 @@ def write_account_data(sheet, followers_total):
             d.get("follower_count", ""),
             total,
         ])
-    print(f"アカウントデータ: {len(sorted_dates)}行を書き込みました")
+        written += 1
+    print(f"アカウントデータ: {written}行を新規書き込み(既存{len(existing_dates)}日分はスキップ)")
 
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
     media_list = fetch_media_list()
 
-    # 既存の投稿IDを取得して重複書き込みを防ぐ
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "post_id / 投稿ID":
         sheet.insert_row(POST_HEADERS, 1)
@@ -140,7 +166,6 @@ def write_post_data(sheet, followers_total):
         reach = insights.get("reach", 0)
         saved = insights.get("saved", 0)
 
-        # エンゲージメント率 = (いいね + コメント + 保存) / フォロワー総数 × 100
         if followers_total > 0:
             engagement_rate = round(
                 (like_count + comments_count + saved) / followers_total * 100, 2
@@ -163,7 +188,7 @@ def write_post_data(sheet, followers_total):
         ])
         new_count += 1
 
-    print(f"投稿データ: {new_count}件を書き込みました（既存{len(existing_ids)}件はスキップ）")
+    print(f"投稿データ: {new_count}件を書き込み(既存{len(existing_ids)}件はスキップ)")
 
 # --- メイン処理 ---
 def main():
