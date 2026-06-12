@@ -71,21 +71,20 @@ def fetch_followers():
 def fetch_media_list():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/media"
     params = {
-        "fields": "id,timestamp,media_type,caption,like_count,comments_count",
-        "limit": 50,
+        "fields": "id,timestamp,media_type,media_product_type,caption,like_count,comments_count",
+        "limit": 100,  # 50 → 100 に増やす（念のため）
         "access_token": ACCESS_TOKEN,
     }
     res = requests.get(url, params=params)
     res.raise_for_status()
     data = res.json().get("data", [])
 
-    # ▼ 診断用: APIが返した最新5件を表示
+    # 診断用ログ
     print(f"[DEBUG] media count returned: {len(data)}")
-    for i, m in enumerate(data[:5]):
-        print(f"[DEBUG] #{i+1} {m.get('timestamp')} | {m.get('media_type')} | {m.get('id')}")
+    for i, m in enumerate(data[:10]):
+        print(f"[DEBUG] #{i+1} {m.get('timestamp')} | {m.get('media_type')} | product_type={m.get('media_product_type', 'N/A')} | {m.get('id')}")
 
     return data
-
 # --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
     url = f"https://graph.facebook.com/v25.0/{media_id}/insights"
