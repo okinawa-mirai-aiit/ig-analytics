@@ -211,15 +211,34 @@ def write_post_data(sheet, followers_total):
             new_count += 1
 
     print(f"投稿データ: 新規{new_count}件 / 更新{update_count}件")
+    
+def fetch_tagged_media():
+    """okinawa_ai_it がタグ付け or 共同投稿者になっている投稿を取得"""
+    url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
+    params = {
+        "fields": "id,timestamp,media_type,media_product_type,caption,like_count,comments_count",
+        "limit": 50,
+        "access_token": ACCESS_TOKEN,
+    }
+    res = requests.get(url, params=params)
+    if res.status_code != 200:
+        print(f"[DEBUG] tags endpoint error: {res.text[:300]}")
+        return []
+    data = res.json().get("data", [])
+    print(f"[DEBUG] tagged media count: {len(data)}")
+    for i, m in enumerate(data[:5]):
+        print(f"[DEBUG] tagged #{i+1} {m.get('timestamp')} | {m.get('media_type')} | {m.get('id')}")
+    return data
 # --- メイン処理 ---
 def main():
     spreadsheet = get_spreadsheet()
     raw_sheet = spreadsheet.worksheet("raw_data")
     post_sheet = spreadsheet.worksheet("post_data")
     followers_total = fetch_followers()
-
     write_account_data(raw_sheet, followers_total)
     write_post_data(post_sheet, followers_total)
 
-if __name__ == "__main__":
-    main()
+    # ▼ 診断: /tags エンドポイントで共同投稿が取れるかテスト
+    print("=" * 50)
+    print("=== タグ付け投稿の取得テスト ===")
+    fetch_tagged_media()
