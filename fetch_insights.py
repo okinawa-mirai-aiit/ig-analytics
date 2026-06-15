@@ -105,7 +105,6 @@ def fetch_media_insights(media_id, media_type):
 def write_account_data(sheet, followers_total):
     insights = fetch_account_insights()
     data_by_date = {}
-
     for metric in insights:
         name = metric["name"]
         if "total_value" in metric:
@@ -125,12 +124,11 @@ def write_account_data(sheet, followers_total):
         sheet.insert_row(ACCOUNT_HEADERS, 1)
         existing_rows = {}
     else:
-        # 日付 → 行番号のマップ
         existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
 
     sorted_dates = sorted(data_by_date.keys())
-    new_count = 0
-    update_count = 0
+    update_batch = []  # 既存行の更新をまとめる
+    append_batch = []  # 新規行の追加をまとめる
 
     for date_str in sorted_dates:
         d = data_by_date[date_str]
@@ -142,16 +140,21 @@ def write_account_data(sheet, followers_total):
             total,
         ]
         if date_str in existing_rows:
-            # 既存行を最新値で上書き
             row_num = existing_rows[date_str]
-            sheet.update(f"A{row_num}:D{row_num}", [row_data])
-            update_count += 1
+            update_batch.append({
+                "range": f"A{row_num}:D{row_num}",
+                "values": [row_data]
+            })
         else:
-            # 新規追加
-            sheet.append_row(row_data)
-            new_count += 1
+            append_batch.append(row_data)
 
-    print(f"アカウントデータ: 新規{new_count}行 / 更新{update_count}行")
+    # 一括書き込み（API呼び出しを最小化）
+    if update_batch:
+        sheet.batch_update(update_batch)
+    if append_batch:
+        sheet.append_rows(append_batch)
+
+    print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
 
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
