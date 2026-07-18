@@ -127,8 +127,8 @@ def write_account_data(sheet, followers_total):
         existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
 
     sorted_dates = sorted(data_by_date.keys())
-    update_batch = []  # 既存行の更新をまとめる
-    append_batch = []  # 新規行の追加をまとめる
+    update_batch = []
+    append_batch = []
 
     for date_str in sorted_dates:
         d = data_by_date[date_str]
@@ -148,14 +148,12 @@ def write_account_data(sheet, followers_total):
         else:
             append_batch.append(row_data)
 
-    # 一括書き込み（API呼び出しを最小化）
     if update_batch:
         sheet.batch_update(update_batch)
     if append_batch:
         sheet.append_rows(append_batch)
 
     print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
-
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
     media_list = fetch_media_list()
@@ -210,7 +208,6 @@ def write_post_data(sheet, followers_total):
         else:
             append_batch.append(row_data)
 
-    # 一括書き込み (429対策)
     if update_batch:
         sheet.batch_update(update_batch)
     if append_batch:
@@ -218,12 +215,12 @@ def write_post_data(sheet, followers_total):
 
     print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
 
-    # timestamp列（B列）で降順ソート、常に新しい投稿が一番上に来るようにする
+    # timestamp列（B列）で降順ソート
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
         data_rows = all_values[1:]
         data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
-        sheet.update(range_name=f"A{row_num}:D{row_num}", values=[row_data])
+        sheet.update(range_name=f"A2:I{len(all_values)}", values=data_rows)
         print("post_data を timestamp 降順でソートしました")
     
 def fetch_tagged_media():
