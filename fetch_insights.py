@@ -215,6 +215,14 @@ def write_post_data(sheet, followers_total):
 
     print(f"投稿データ: 新規{new_count}件 / 更新{update_count}件")
     
+    # timestamp列（B列）で降順ソート、常に新しい投稿が一番上に来るようにする
+    all_values = sheet.get_all_values()
+    if len(all_values) > 1:
+        data_rows = all_values[1:]
+        data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
+        sheet.update(range_name=f"A2:I{len(all_values)}", values=data_rows)
+        print("post_data を timestamp 降順でソートしました")
+    
 def fetch_tagged_media():
     """okinawa_ai_it がタグ付け or 共同投稿者になっている投稿を取得"""
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
