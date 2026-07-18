@@ -165,11 +165,10 @@ def write_post_data(sheet, followers_total):
         sheet.insert_row(POST_HEADERS, 1)
         existing_rows = {}
     else:
-        # post_id → 行番号のマップ
         existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
 
-    new_count = 0
-    update_count = 0
+    update_batch = []
+    append_batch = []
 
     for media in media_list:
         media_id = media["id"]
@@ -181,7 +180,6 @@ def write_post_data(sheet, followers_total):
         reach = insights.get("reach", 0)
         saved = insights.get("saved", 0)
 
-        # エンゲージメント率 = (いいね + コメント + 保存) / フォロワー総数 × 100
         if followers_total > 0:
             engagement_rate = round(
                 (like_count + comments_count + saved) / followers_total * 100, 2
@@ -204,17 +202,22 @@ def write_post_data(sheet, followers_total):
         ]
 
         if media_id in existing_rows:
-            # 既存投稿の指標を最新値で上書き
             row_num = existing_rows[media_id]
-            sheet.update(f"A{row_num}:I{row_num}", [row_data])
-            update_count += 1
+            update_batch.append({
+                "range": f"A{row_num}:I{row_num}",
+                "values": [row_data]
+            })
         else:
-            # 新規投稿を追加
-            sheet.append_row(row_data)
-            new_count += 1
+            append_batch.append(row_data)
 
-    print(f"投稿データ: 新規{new_count}件 / 更新{update_count}件")
-    
+    # 一括書き込み (429対策)
+    if update_batch:
+        sheet.batch_update(update_batch)
+    if append_batch:
+        sheet.append_rows(append_batch)
+
+    print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
+
     # timestamp列（B列）で降順ソート、常に新しい投稿が一番上に来るようにする
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
