@@ -9,6 +9,8 @@ import json
 IG_ACCOUNT_ID = os.environ["IG_ACCOUNT_ID"]
 ACCESS_TOKEN = os.environ["IG_PAGE_ACCESS_TOKEN"]
 SPREADSHEET_ID = "1SaVKe_sk7KAdjJlA0MEL7K71WnFEQ-i4Z85npcBzbzM"
+# 共同投稿として取り込むアカウント
+COLLAB_USERNAMES = ["okimira_seitokai", "okimira_senmonrekei1"]
 
 ACCOUNT_METRICS = ["reach", "follower_count"]
 
@@ -42,12 +44,9 @@ def get_spreadsheet():
 # --- アカウントインサイト取得 ---
 def fetch_account_insights():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/insights"
-
-    # 過去7日分を since/until で明示
     now = datetime.now(timezone.utc)
     until_ts = int(now.timestamp())
     since_ts = int((now - timedelta(days=7)).timestamp())
-
     params = {
         "metric": ",".join(ACCOUNT_METRICS),
         "period": "day",
@@ -59,6 +58,7 @@ def fetch_account_insights():
     print(f"[DEBUG] account insights status: {res.status_code}")
     res.raise_for_status()
     return res.json().get("data", [])
+
 # --- フォロワー総数取得 ---
 def fetch_followers():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}"
@@ -67,24 +67,66 @@ def fetch_followers():
     res.raise_for_status()
     return res.json()["followers_count"]
 
-# --- 投稿一覧取得 ---
+# --- 自分の投稿一覧取得 ---
 def fetch_media_list():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/media"
     params = {
         "fields": "id,timestamp,media_type,media_product_type,caption,like_count,comments_count",
-        "limit": 100,  # 50 → 100 に増やす（念のため）
+        "limit": 100,
         "access_token": ACCESS_TOKEN,
     }
     res = requests.get(url, params=params)
     res.raise_for_status()
     data = res.json().get("data", [])
 
-    # 診断用ログ
     print(f"[DEBUG] media count returned: {len(data)}")
     for i, m in enumerate(data[:10]):
         print(f"[DEBUG] #{i+1} {m.get('timestamp')} | {m.get('media_type')} | product_type={m.get('media_product_type', 'N/A')} | {m.get('id')}")
 
     return data
+
+# --- 共同投稿(タグ付け)取得 ---
+def fetch_tagged_media():
+    """okinawa_ai_it が共同投稿者になっている投稿を取得"""
+    url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
+
+    field_sets = [
+        "id,timestamp,media_type,media_product_type,username,permalink,caption,like_count,comments_count",
+        "id,timestamp,media_type,media_product_type,username,permalink,caption",
+        "id,timestamp,media_type,media_product_type,username,permalink",
+    ]
+
+    data = []
+    used_fields = ""
+    for fields in field_sets:
+        params = {
+            "fields": fields,
+            "limit": 25,
+            "access_token": ACCESS_TOKEN,
+        }
+        res = requests.get(url, params=params)
+        if res.status_code == 200:
+            data = res.json().get("data", [])
+            used_fields = fields
+            print(f"[DEBUG] tagged fetched: {len(data)} items")
+            print(f"[DEBUG] used fields: {used_fields}")
+            break
+        else:
+            print(f"[DEBUG] failed with fields='{fields}': {res.text[:200]}")
+
+    if not data:
+        print("[DEBUG] タグ付け投稿の取得に失敗")
+        return []
+
+    # 学校関連の共同投稿アカウントだけにフィルタ
+    filtered = [m for m in data if m.get("username") in COLLAB_USERNAMES]
+    print(f"[DEBUG] 共同投稿フィルタ後: {len(filtered)}/{len(data)}件")
+
+    for i, m in enumerate(filtered[:5]):
+        print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type')} | @{m.get('username')} | {m.get('id')}")
+
+    return filtered
+
 # --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
     url = f"https://graph.facebook.com/v25.0/{media_id}/insights"
@@ -154,9 +196,23 @@ def write_account_data(sheet, followers_total):
         sheet.append_rows(append_batch)
 
     print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
+
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
+    # 自分の投稿と共同投稿の両方を取得
     media_list = fetch_media_list()
+    tagged_list = fetch_tagged_media()
+
+    # 統合(重複除去)
+    all_media = media_list + tagged_list
+    seen_ids = set()
+    unique_media = []
+    for m in all_media:
+        mid = m.get("id")
+        if mid and mid not in seen_ids:
+            seen_ids.add(mid)
+            unique_media.append(m)
+    print(f"[DEBUG] 全投稿件数: 自分={len(media_list)} + 共同={len(tagged_list)} = ユニーク{len(unique_media)}件")
 
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "post_id / 投稿ID":
@@ -168,13 +224,15 @@ def write_post_data(sheet, followers_total):
     update_batch = []
     append_batch = []
 
-    for media in media_list:
+    for media in unique_media:
         media_id = media["id"]
         media_type = media.get("media_type", "")
+
+        # 投稿インサイト取得(共同投稿の場合はオーナーじゃないので失敗する可能性あり、その場合は0)
         insights = fetch_media_insights(media_id, media_type)
 
-        like_count = media.get("like_count", 0)
-        comments_count = media.get("comments_count", 0)
+        like_count = media.get("like_count", 0) or 0
+        comments_count = media.get("comments_count", 0) or 0
         reach = insights.get("reach", 0)
         saved = insights.get("saved", 0)
 
@@ -185,7 +243,15 @@ def write_post_data(sheet, followers_total):
         else:
             engagement_rate = ""
 
-        caption = media.get("caption", "")[:50] if media.get("caption") else ""
+        # キャプション処理(共同投稿には識別用プレフィックスを付ける)
+        raw_caption = media.get("caption", "") or ""
+        caption_body = raw_caption[:50] if raw_caption else ""
+
+        collab_username = media.get("username")
+        if collab_username and collab_username in COLLAB_USERNAMES:
+            caption = f"🤝@{collab_username}: {caption_body}"
+        else:
+            caption = caption_body
 
         row_data = [
             media_id,
@@ -215,46 +281,14 @@ def write_post_data(sheet, followers_total):
 
     print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
 
-    # timestamp列（B列）で降順ソート
+    # timestamp列(B列)で降順ソート、常に新しい投稿が一番上に来るようにする
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
         data_rows = all_values[1:]
         data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
         sheet.update(range_name=f"A2:I{len(all_values)}", values=data_rows)
         print("post_data を timestamp 降順でソートしました")
-    
-def fetch_tagged_media():
-    """okinawa_ai_it がタグ付け or 共同投稿者になっている投稿を取得"""
-    url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
 
-    # フィールドを段階的に減らして試す
-    field_sets = [
-        "id,timestamp,media_type,media_product_type,username,permalink",
-        "id,timestamp,media_type,username,permalink",
-        "id,timestamp,username,permalink",
-        "id,timestamp,username",
-        "id,timestamp",
-    ]
-
-    for fields in field_sets:
-        params = {
-            "fields": fields,
-            "limit": 10,
-            "access_token": ACCESS_TOKEN,
-        }
-        res = requests.get(url, params=params)
-        if res.status_code == 200:
-            data = res.json().get("data", [])
-            print(f"[DEBUG] tagged fetched with fields='{fields}': {len(data)} items")
-            # 全件の中身を出力(タグ付け投稿の正体を確認)
-            for i, m in enumerate(data):
-                print(f"[DEBUG] tagged #{i+1}: {m}")
-            return data
-        else:
-            print(f"[DEBUG] failed with fields='{fields}': {res.text[:200]}")
-
-    return []
-# --- メイン処理 ---
 # --- メイン処理 ---
 def main():
     spreadsheet = get_spreadsheet()
@@ -263,11 +297,6 @@ def main():
     followers_total = fetch_followers()
     write_account_data(raw_sheet, followers_total)
     write_post_data(post_sheet, followers_total)
-
-    # ▼ 診断: /tags エンドポイントで共同投稿が取れるかテスト
-    print("=" * 50)
-    print("=== タグ付け投稿の取得テスト ===")
-    fetch_tagged_media()
 
 if __name__ == "__main__":
     main()
