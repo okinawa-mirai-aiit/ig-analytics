@@ -226,9 +226,10 @@ def write_post_data(sheet, followers_total):
 def fetch_tagged_media():
     """okinawa_ai_it がタグ付け or 共同投稿者になっている投稿を取得"""
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
+    # まず最小フィールドで取得(重いフィールドを避ける)
     params = {
-        "fields": "id,timestamp,media_type,media_product_type,caption,like_count,comments_count",
-        "limit": 50,
+        "fields": "id,timestamp,media_type,media_product_type",
+        "limit": 25,  # 50 → 25 に減らす
         "access_token": ACCESS_TOKEN,
     }
     res = requests.get(url, params=params)
