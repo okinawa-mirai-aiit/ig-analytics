@@ -227,46 +227,33 @@ def fetch_tagged_media():
     """okinawa_ai_it がタグ付け or 共同投稿者になっている投稿を取得"""
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
 
-    # ステップ1: 最小フィールド(id + timestamp のみ)で ID 一覧を取得
-    params = {
-        "fields": "id,timestamp",
-        "limit": 10,
-        "access_token": ACCESS_TOKEN,
-    }
-    res = requests.get(url, params=params)
-    if res.status_code != 200:
-        print(f"[DEBUG] tags endpoint error (step 1): {res.text[:500]}")
-        # フォールバック: fields指定なしでもう1回試す
-        params_minimal = {"limit": 10, "access_token": ACCESS_TOKEN}
-        res = requests.get(url, params=params_minimal)
-        if res.status_code != 200:
-            print(f"[DEBUG] tags endpoint error (step 2 minimal): {res.text[:500]}")
-            return []
-        print("[DEBUG] fallback (fieldsなし) で成功")
+    # フィールドを段階的に減らして試す
+    field_sets = [
+        "id,timestamp,media_type,media_product_type,username,permalink",
+        "id,timestamp,media_type,username,permalink",
+        "id,timestamp,username,permalink",
+        "id,timestamp,username",
+        "id,timestamp",
+    ]
 
-    data = res.json().get("data", [])
-    print(f"[DEBUG] tagged media count (step 1): {len(data)}")
-
-    # ステップ2: 各投稿の詳細を個別に取得
-    detailed = []
-    for m in data:
-        media_id = m["id"]
-        detail_url = f"https://graph.facebook.com/v25.0/{media_id}"
-        detail_params = {
-            "fields": "id,timestamp,media_type,media_product_type,caption,like_count,comments_count",
+    for fields in field_sets:
+        params = {
+            "fields": fields,
+            "limit": 10,
             "access_token": ACCESS_TOKEN,
         }
-        detail_res = requests.get(detail_url, params=detail_params)
-        if detail_res.status_code == 200:
-            detailed.append(detail_res.json())
+        res = requests.get(url, params=params)
+        if res.status_code == 200:
+            data = res.json().get("data", [])
+            print(f"[DEBUG] tagged fetched with fields='{fields}': {len(data)} items")
+            # 全件の中身を出力(タグ付け投稿の正体を確認)
+            for i, m in enumerate(data):
+                print(f"[DEBUG] tagged #{i+1}: {m}")
+            return data
         else:
-            print(f"[DEBUG] detail fetch failed for {media_id}: {detail_res.text[:200]}")
+            print(f"[DEBUG] failed with fields='{fields}': {res.text[:200]}")
 
-    print(f"[DEBUG] tagged media detailed count: {len(detailed)}")
-    for i, m in enumerate(detailed[:5]):
-        print(f"[DEBUG] tagged #{i+1} {m.get('timestamp')} | {m.get('media_type')} | {m.get('id')}")
-
-    return detailed
+    return []
 # --- メイン処理 ---
 # --- メイン処理 ---
 def main():
