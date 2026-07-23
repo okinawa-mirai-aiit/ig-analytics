@@ -86,46 +86,78 @@ def fetch_media_list():
     return data
 
 # --- 共同投稿(タグ付け)取得 ---
+import time
+
 def fetch_tagged_media():
     """okinawa_ai_it が共同投稿者になっている投稿を取得"""
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
 
+    # フィールドを段階的に減らして試す(短いものから)
     field_sets = [
-        "id,timestamp,media_type,media_product_type,username,permalink,caption,like_count,comments_count",
-        "id,timestamp,media_type,media_product_type,username,permalink,caption",
-        "id,timestamp,media_type,media_product_type,username,permalink",
+        "id,timestamp,username",
+        "id,username",
+        "id,timestamp",
     ]
 
+    # 各フィールドセットで最大2回リトライ
     data = []
     used_fields = ""
     for fields in field_sets:
-        params = {
-            "fields": fields,
-            "limit": 25,
-            "access_token": ACCESS_TOKEN,
-        }
-        res = requests.get(url, params=params)
-        if res.status_code == 200:
-            data = res.json().get("data", [])
-            used_fields = fields
-            print(f"[DEBUG] tagged fetched: {len(data)} items")
-            print(f"[DEBUG] used fields: {used_fields}")
+        for attempt in range(2):
+            params = {
+                "fields": fields,
+                "limit": 10,
+                "access_token": ACCESS_TOKEN,
+            }
+            res = requests.get(url, params=params)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                used_fields = fields
+                print(f"[DEBUG] tagged fetched: {len(data)} items (fields='{fields}', attempt {attempt+1})")
+                break
+            else:
+                print(f"[DEBUG] failed fields='{fields}' attempt {attempt+1}: {res.text[:200]}")
+                if attempt == 0:
+                    time.sleep(2)  # 2秒待ってリトライ
+        if data:
             break
-        else:
-            print(f"[DEBUG] failed with fields='{fields}': {res.text[:200]}")
 
     if not data:
-        print("[DEBUG] タグ付け投稿の取得に失敗")
+        print("[DEBUG] タグ付け投稿の取得に失敗(全パターンでエラー)")
         return []
 
     # 学校関連の共同投稿アカウントだけにフィルタ
     filtered = [m for m in data if m.get("username") in COLLAB_USERNAMES]
     print(f"[DEBUG] 共同投稿フィルタ後: {len(filtered)}/{len(data)}件")
 
-    for i, m in enumerate(filtered[:5]):
-        print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type')} | @{m.get('username')} | {m.get('id')}")
+    # 各投稿について、詳細情報を1件ずつ取得(可能な限り)
+    enriched = []
+    for m in filtered:
+        media_id = m["id"]
+        enriched_data = dict(m)  # コピー
 
-    return filtered
+        # 個別に詳細を取得(重いフィールドを個別に取る)
+        detail_url = f"https://graph.facebook.com/v25.0/{media_id}"
+        detail_params = {
+            "fields": "media_type,media_product_type,caption,like_count,comments_count,permalink",
+            "access_token": ACCESS_TOKEN,
+        }
+        detail_res = requests.get(detail_url, params=detail_params)
+        if detail_res.status_code == 200:
+            detail = detail_res.json()
+            enriched_data.update(detail)
+        else:
+            # 失敗しても id, timestamp, username は残る
+            print(f"[DEBUG] detail fetch failed for {media_id}: {detail_res.text[:150]}")
+
+        enriched.append(enriched_data)
+        time.sleep(0.3)  # レート制限対策で少し間隔をあける
+
+    print(f"[DEBUG] enrich完了: {len(enriched)}件")
+    for i, m in enumerate(enriched[:5]):
+        print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type', 'N/A')} | @{m.get('username')} | {m.get('id')}")
+
+    return enriched
 
 # --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
