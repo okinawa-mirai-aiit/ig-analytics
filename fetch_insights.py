@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
 import json
+import time
 
 # --- 設定 ---
 IG_ACCOUNT_ID = os.environ["IG_ACCOUNT_ID"]
@@ -33,6 +34,7 @@ POST_HEADERS = [
     "engagement_rate / エンゲージメント率(%)",
 ]
 
+
 # --- Google Sheets 認証 ---
 def get_spreadsheet():
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -40,6 +42,7 @@ def get_spreadsheet():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID)
+
 
 # --- アカウントインサイト取得 ---
 def fetch_account_insights():
@@ -59,6 +62,7 @@ def fetch_account_insights():
     res.raise_for_status()
     return res.json().get("data", [])
 
+
 # --- フォロワー総数取得 ---
 def fetch_followers():
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}"
@@ -66,6 +70,7 @@ def fetch_followers():
     res = requests.get(url, params=params)
     res.raise_for_status()
     return res.json()["followers_count"]
+
 
 # --- 自分の投稿一覧取得 ---
 def fetch_media_list():
@@ -85,40 +90,36 @@ def fetch_media_list():
 
     return data
 
-# --- 共同投稿(タグ付け)取得 ---
-import time
 
+# --- 共同投稿(タグ付け)取得 ---
 def fetch_tagged_media():
     """okinawa_ai_it が共同投稿者になっている投稿を取得"""
     url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/tags"
 
-    # フィールドを段階的に減らして試す(短いものから)
-    field_sets = [
-        "id,timestamp,username",
-        "id,username",
-        "id,timestamp",
+    # フィールドと件数を段階的に減らして試す
+    attempts = [
+        ("id,timestamp,username", 5),
+        ("id,username", 3),
+        ("id", 1),
     ]
 
-    # 各フィールドセットで最大2回リトライ
     data = []
-    used_fields = ""
-    for fields in field_sets:
+    for fields, limit in attempts:
         for attempt in range(2):
             params = {
                 "fields": fields,
-                "limit": 10,
+                "limit": limit,
                 "access_token": ACCESS_TOKEN,
             }
             res = requests.get(url, params=params)
             if res.status_code == 200:
                 data = res.json().get("data", [])
-                used_fields = fields
-                print(f"[DEBUG] tagged fetched: {len(data)} items (fields='{fields}', attempt {attempt+1})")
+                print(f"[DEBUG] tagged fetched: {len(data)} items (fields='{fields}', limit={limit})")
                 break
             else:
-                print(f"[DEBUG] failed fields='{fields}' attempt {attempt+1}: {res.text[:200]}")
+                print(f"[DEBUG] failed fields='{fields}' limit={limit} attempt {attempt+1}: {res.text[:200]}")
                 if attempt == 0:
-                    time.sleep(2)  # 2秒待ってリトライ
+                    time.sleep(2)
         if data:
             break
 
@@ -126,38 +127,39 @@ def fetch_tagged_media():
         print("[DEBUG] タグ付け投稿の取得に失敗(全パターンでエラー)")
         return []
 
-    # 学校関連の共同投稿アカウントだけにフィルタ
-    filtered = [m for m in data if m.get("username") in COLLAB_USERNAMES]
+    # username が取れている場合のみフィルタ、取れていない場合は全件通す
+    if any("username" in m for m in data):
+        filtered = [m for m in data if m.get("username") in COLLAB_USERNAMES]
+    else:
+        filtered = data
     print(f"[DEBUG] 共同投稿フィルタ後: {len(filtered)}/{len(data)}件")
 
-    # 各投稿について、詳細情報を1件ずつ取得(可能な限り)
+    # 各投稿について、詳細情報を1件ずつ取得
     enriched = []
     for m in filtered:
         media_id = m["id"]
-        enriched_data = dict(m)  # コピー
+        enriched_data = dict(m)
 
-        # 個別に詳細を取得(重いフィールドを個別に取る)
         detail_url = f"https://graph.facebook.com/v25.0/{media_id}"
         detail_params = {
-            "fields": "media_type,media_product_type,caption,like_count,comments_count,permalink",
+            "fields": "media_type,media_product_type,caption,like_count,comments_count,permalink,timestamp,username",
             "access_token": ACCESS_TOKEN,
         }
         detail_res = requests.get(detail_url, params=detail_params)
         if detail_res.status_code == 200:
-            detail = detail_res.json()
-            enriched_data.update(detail)
+            enriched_data.update(detail_res.json())
         else:
-            # 失敗しても id, timestamp, username は残る
             print(f"[DEBUG] detail fetch failed for {media_id}: {detail_res.text[:150]}")
 
         enriched.append(enriched_data)
-        time.sleep(0.3)  # レート制限対策で少し間隔をあける
+        time.sleep(0.3)
 
     print(f"[DEBUG] enrich完了: {len(enriched)}件")
     for i, m in enumerate(enriched[:5]):
         print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type', 'N/A')} | @{m.get('username')} | {m.get('id')}")
 
     return enriched
+
 
 # --- 投稿インサイト取得 ---
 def fetch_media_insights(media_id, media_type):
@@ -174,6 +176,7 @@ def fetch_media_insights(media_id, media_type):
     for item in res.json().get("data", []):
         result[item["name"]] = item["values"][0]["value"] if item.get("values") else 0
     return result
+
 
 # --- アカウントデータ書き込み ---
 def write_account_data(sheet, followers_total):
@@ -196,6 +199,7 @@ def write_account_data(sheet, followers_total):
     existing = sheet.get_all_values()
     if not existing or not existing[0] or existing[0][0] != "date / 日付":
         sheet.insert_row(ACCOUNT_HEADERS, 1)
+        existing = sheet.get_all_values()
         existing_rows = {}
     else:
         existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
@@ -206,20 +210,24 @@ def write_account_data(sheet, followers_total):
 
     for date_str in sorted_dates:
         d = data_by_date[date_str]
-        # 最新日のみ実値、それ以外は既存値を維持（空文字で潰さない）
-if date_str == sorted_dates[-1]:
-    total = followers_total
-elif date_str in existing_rows:
-    row_idx = existing_rows[date_str] - 2
-    total = existing[row_idx + 1][3] if len(existing[row_idx + 1]) > 3 else ""
-else:
-    total = ""
+
+        # 最新日のみ実値、それ以外は既存値を維持(空文字で潰さない)
+        if date_str == sorted_dates[-1]:
+            total = followers_total
+        elif date_str in existing_rows:
+            row_num = existing_rows[date_str]
+            prev_row = existing[row_num - 1]
+            total = prev_row[3] if len(prev_row) > 3 else ""
+        else:
+            total = ""
+
         row_data = [
             date_str,
             d.get("reach", ""),
             d.get("follower_count", ""),
             total,
         ]
+
         if date_str in existing_rows:
             row_num = existing_rows[date_str]
             update_batch.append({
@@ -236,9 +244,17 @@ else:
 
     print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
 
+    # date列(A列)で昇順ソート、時系列を保つ
+    all_values = sheet.get_all_values()
+    if len(all_values) > 1:
+        data_rows = [r for r in all_values[1:] if r and r[0]]
+        data_rows.sort(key=lambda r: r[0])
+        sheet.update(range_name=f"A2:D{len(data_rows) + 1}", values=data_rows)
+        print("raw_data を date 昇順でソートしました")
+
+
 # --- 投稿データ書き込み ---
 def write_post_data(sheet, followers_total):
-    # 自分の投稿と共同投稿の両方を取得
     media_list = fetch_media_list()
     tagged_list = fetch_tagged_media()
 
@@ -267,7 +283,6 @@ def write_post_data(sheet, followers_total):
         media_id = media["id"]
         media_type = media.get("media_type", "")
 
-        # 投稿インサイト取得(共同投稿の場合はオーナーじゃないので失敗する可能性あり、その場合は0)
         insights = fetch_media_insights(media_id, media_type)
 
         like_count = media.get("like_count", 0) or 0
@@ -282,7 +297,6 @@ def write_post_data(sheet, followers_total):
         else:
             engagement_rate = ""
 
-        # キャプション処理(共同投稿には識別用プレフィックスを付ける)
         raw_caption = media.get("caption", "") or ""
         caption_body = raw_caption[:50] if raw_caption else ""
 
@@ -323,10 +337,11 @@ def write_post_data(sheet, followers_total):
     # timestamp列(B列)で降順ソート、常に新しい投稿が一番上に来るようにする
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
-        data_rows = all_values[1:]
+        data_rows = [r for r in all_values[1:] if r and r[0]]
         data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
-        sheet.update(range_name=f"A2:I{len(all_values)}", values=data_rows)
+        sheet.update(range_name=f"A2:I{len(data_rows) + 1}", values=data_rows)
         print("post_data を timestamp 降順でソートしました")
+
 
 # --- メイン処理 ---
 def main():
@@ -336,6 +351,7 @@ def main():
     followers_total = fetch_followers()
     write_account_data(raw_sheet, followers_total)
     write_post_data(post_sheet, followers_total)
+
 
 if __name__ == "__main__":
     main()
