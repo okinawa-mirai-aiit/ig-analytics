@@ -203,7 +203,10 @@ def write_account_data(sheet, followers_total):
         existing_rows = {}
     else:
         existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
-
+    # 当日は集計未完了のため除外
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+    data_by_date.pop(today_utc, None)
+    
     sorted_dates = sorted(data_by_date.keys())
     update_batch = []
     append_batch = []
@@ -245,12 +248,15 @@ def write_account_data(sheet, followers_total):
     print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
 
     # date列(A列)で昇順ソート、時系列を保つ
+    time.sleep(2)
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
         data_rows = [r for r in all_values[1:] if r and r[0]]
         data_rows.sort(key=lambda r: r[0])
+        data_rows = [(r + [""] * 4)[:4] for r in data_rows]
+        sheet.batch_clear([f"A2:D{len(all_values)}"])
         sheet.update(range_name=f"A2:D{len(data_rows) + 1}", values=data_rows)
-        print("raw_data を date 昇順でソートしました")
+        print(f"raw_data を date 昇順でソートしました ({len(data_rows)}行)")
 
 
 # --- 投稿データ書き込み ---
@@ -335,12 +341,15 @@ def write_post_data(sheet, followers_total):
     print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
 
     # timestamp列(B列)で降順ソート、常に新しい投稿が一番上に来るようにする
+    time.sleep(2)
     all_values = sheet.get_all_values()
     if len(all_values) > 1:
         data_rows = [r for r in all_values[1:] if r and r[0]]
         data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
+        data_rows = [(r + [""] * 9)[:9] for r in data_rows]
+        sheet.batch_clear([f"A2:I{len(all_values)}"])
         sheet.update(range_name=f"A2:I{len(data_rows) + 1}", values=data_rows)
-        print("post_data を timestamp 降順でソートしました")
+        print(f"post_data を timestamp 降順でソートしました ({len(data_rows)}行)")
 
 
 # --- メイン処理 ---
