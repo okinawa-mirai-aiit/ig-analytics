@@ -206,7 +206,14 @@ def write_account_data(sheet, followers_total):
 
     for date_str in sorted_dates:
         d = data_by_date[date_str]
-        total = followers_total if date_str == sorted_dates[-1] else ""
+        # 最新日のみ実値、それ以外は既存値を維持（空文字で潰さない）
+if date_str == sorted_dates[-1]:
+    total = followers_total
+elif date_str in existing_rows:
+    row_idx = existing_rows[date_str] - 2
+    total = existing[row_idx + 1][3] if len(existing[row_idx + 1]) > 3 else ""
+else:
+    total = ""
         row_data = [
             date_str,
             d.get("reach", ""),
