@@ -200,26 +200,38 @@ def write_account_data(sheet, followers_total):
     if not existing or not existing[0] or existing[0][0] != "date / 日付":
         sheet.insert_row(ACCOUNT_HEADERS, 1)
         existing = sheet.get_all_values()
-        existing_rows = {}
-    else:
-        existing_rows = {row[0]: idx + 2 for idx, row in enumerate(existing[1:]) if row and row[0]}
+
     # 当日は集計未完了のため除外
     today_utc = datetime.now(timezone.utc).date().isoformat()
     data_by_date.pop(today_utc, None)
-    
-    sorted_dates = sorted(data_by_date.keys())
-    update_batch = []
-    append_batch = []
 
+    sorted_dates = sorted(data_by_date.keys())
+
+    # --- タスクA: 同日重複行の防止 ---
+    # 書き込み対象日(sorted_dates)と一致する既存行をすべて削除してから
+    # 新しいデータを書き込み直すことで、シート内に同じ日付の行が
+    # 複数残ってしまう不具合を防ぐ。
+    target_dates = set(sorted_dates)
+    existing_data_rows = [row for row in existing[1:] if row and row[0]]
+
+    # 既存データから日付ごとの代表行(followers_total引き継ぎ用)を作る
+    # 同日重複がすでに存在していた場合は最初に見つかった行を採用する
+    existing_by_date = {}
+    for row in existing_data_rows:
+        existing_by_date.setdefault(row[0], row)
+
+    # 書き込み対象日に該当する行はここで除外(=削除)する
+    remaining_rows = [row for row in existing_data_rows if row[0] not in target_dates]
+
+    new_rows = []
     for date_str in sorted_dates:
         d = data_by_date[date_str]
 
         # 最新日のみ実値、それ以外は既存値を維持(空文字で潰さない)
         if date_str == sorted_dates[-1]:
             total = followers_total
-        elif date_str in existing_rows:
-            row_num = existing_rows[date_str]
-            prev_row = existing[row_num - 1]
+        elif date_str in existing_by_date:
+            prev_row = existing_by_date[date_str]
             total = prev_row[3] if len(prev_row) > 3 else ""
         else:
             total = ""
@@ -230,33 +242,20 @@ def write_account_data(sheet, followers_total):
             d.get("follower_count", ""),
             total,
         ]
+        new_rows.append(row_data)
 
-        if date_str in existing_rows:
-            row_num = existing_rows[date_str]
-            update_batch.append({
-                "range": f"A{row_num}:D{row_num}",
-                "values": [row_data]
-            })
-        else:
-            append_batch.append(row_data)
+    # 削除後の既存行 + 新規/更新行をまとめて date 昇順で並べ直す
+    all_rows = remaining_rows + new_rows
+    all_rows.sort(key=lambda r: r[0])
+    all_rows = [(r + [""] * 4)[:4] for r in all_rows]
 
-    if update_batch:
-        sheet.batch_update(update_batch)
-    if append_batch:
-        sheet.append_rows(append_batch)
+    # 既存範囲を一旦クリアしてから、重複のない状態で全行を書き込み直す
+    clear_range_end = max(len(existing), len(all_rows) + 1)
+    sheet.batch_clear([f"A2:D{clear_range_end}"])
+    if all_rows:
+        sheet.update(range_name=f"A2:D{len(all_rows) + 1}", values=all_rows)
 
-    print(f"アカウントデータ: 新規{len(append_batch)}行 / 更新{len(update_batch)}行")
-
-    # date列(A列)で昇順ソート、時系列を保つ
-    time.sleep(2)
-    all_values = sheet.get_all_values()
-    if len(all_values) > 1:
-        data_rows = [r for r in all_values[1:] if r and r[0]]
-        data_rows.sort(key=lambda r: r[0])
-        data_rows = [(r + [""] * 4)[:4] for r in data_rows]
-        sheet.batch_clear([f"A2:D{len(all_values)}"])
-        sheet.update(range_name=f"A2:D{len(data_rows) + 1}", values=data_rows)
-        print(f"raw_data を date 昇順でソートしました ({len(data_rows)}行)")
+    print(f"アカウントデータ: 対象{len(new_rows)}日分を書き込み(同日重複削除後、合計{len(all_rows)}行)")
 
 
 # --- 投稿データ書き込み ---
