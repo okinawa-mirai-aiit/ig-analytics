@@ -1,4 +1,4 @@
-import os
+<![CDATA[import os
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -91,6 +91,34 @@ def fetch_media_list():
     return data
 
 
+# --- Business Discovery API でコラボアカウントの投稿情報を一括取得 ---
+def fetch_business_discovery_media(username, limit=25):
+    """指定したコラボアカウント(クリエイター/ビジネスアカウント限定)の
+    公開投稿一覧を取得する。自分のアクセストークンのみで、相手のトークン
+    不要でいいね数・コメント数などの公開情報が取得できる。
+    戻り値は {media_id: {like_count, comments_count, caption, ...}} の辞書。
+    """
+    url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}"
+    fields = (
+        f"business_discovery.username({username})"
+        f"{{media.limit({limit}){{id,caption,comments_count,like_count,media_type,timestamp,permalink}}}}"
+    )
+    params = {"fields": fields, "access_token": ACCESS_TOKEN}
+    res = requests.get(url, params=params)
+    if res.status_code != 200:
+        print(f"[DEBUG] business_discovery failed for @{username}: {res.text[:200]}")
+        return {}
+
+    media_list = (
+        res.json()
+        .get("business_discovery", {})
+        .get("media", {})
+        .get("data", [])
+    )
+    print(f"[DEBUG] business_discovery @{username}: {len(media_list)}件取得")
+    return {m["id"]: m for m in media_list if "id" in m}
+
+
 # --- 共同投稿(タグ付け)取得 ---
 def fetch_tagged_media():
     """okinawa_ai_it が共同投稿者になっている投稿を取得"""
@@ -134,29 +162,46 @@ def fetch_tagged_media():
         filtered = data
     print(f"[DEBUG] 共同投稿フィルタ後: {len(filtered)}/{len(data)}件")
 
-    # 各投稿について、詳細情報を1件ずつ取得
+    # --- Business Discovery API でコラボアカウントの投稿情報(いいね数・コメント数)を一括取得 ---
+    # /tags の情報だけではいいね数・コメント数が信頼できないため、各コラボ
+    # アカウント(クリエイターアカウント化済み)の公開投稿一覧(最大25件)を
+    # Business Discovery経由で取得し、media_idをキーにしたルックアップ辞書を作る。
+    bd_lookup = {}
+    for username in COLLAB_USERNAMES:
+        bd_lookup.update(fetch_business_discovery_media(username))
+        time.sleep(0.3)
+
+    # 各投稿について詳細情報を付与
     enriched = []
+    bd_hit_count = 0
     for m in filtered:
         media_id = m["id"]
         enriched_data = dict(m)
 
-        detail_url = f"https://graph.facebook.com/v25.0/{media_id}"
-        detail_params = {
-            "fields": "media_type,media_product_type,caption,like_count,comments_count,permalink,timestamp,username",
-            "access_token": ACCESS_TOKEN,
-        }
-        detail_res = requests.get(detail_url, params=detail_params)
-        if detail_res.status_code == 200:
-            enriched_data.update(detail_res.json())
+        if media_id in bd_lookup:
+            # Business Discoveryで取得できた場合はそちらを優先
+            # (いいね数・コメント数の取得成功率が高い)
+            enriched_data.update(bd_lookup[media_id])
+            bd_hit_count += 1
         else:
-            print(f"[DEBUG] detail fetch failed for {media_id}: {detail_res.text[:150]}")
+            # フォールバック: 直接メディアIDを叩く(所有者でないため失敗しやすい)
+            detail_url = f"https://graph.facebook.com/v25.0/{media_id}"
+            detail_params = {
+                "fields": "media_type,media_product_type,caption,like_count,comments_count,permalink,timestamp,username",
+                "access_token": ACCESS_TOKEN,
+            }
+            detail_res = requests.get(detail_url, params=detail_params)
+            if detail_res.status_code == 200:
+                enriched_data.update(detail_res.json())
+            else:
+                print(f"[DEBUG] detail fetch failed for {media_id}: {detail_res.text[:150]}")
 
         enriched.append(enriched_data)
         time.sleep(0.3)
 
-    print(f"[DEBUG] enrich完了: {len(enriched)}件")
+    print(f"[DEBUG] enrich完了: {len(enriched)}件 (business_discovery一致: {bd_hit_count}件)")
     for i, m in enumerate(enriched[:5]):
-        print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type', 'N/A')} | @{m.get('username')} | {m.get('id')}")
+        print(f"[DEBUG] collab #{i+1}: {m.get('timestamp')} | {m.get('media_type', 'N/A')} | @{m.get('username')} | {m.get('id')} | like={m.get('like_count')} | comments={m.get('comments_count')}")
 
     return enriched
 
@@ -375,3 +420,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+]]>
