@@ -38,6 +38,7 @@ POST_HEADERS = [
 POST_HISTORY_SHEET_NAME = "post_history"
 POST_HISTORY_HEADERS = [
     "post_id / 投稿ID",
+    "post_date / 投稿日",
     "snapshot_date / 取得日",
     "like_count / いいね数",
     "comments_count / コメント数",
@@ -344,12 +345,12 @@ def write_post_history(history_sheet, snapshot_rows):
     重複行が積み上がらないようにする(手動再実行/1日複数回実行への対策)。"""
     existing = history_sheet.get_all_values()
     existing_keys = {
-        (row[0], row[1]) for row in existing[1:] if len(row) > 1 and row[0]
+        (row[0], row[2]) for row in existing[1:] if len(row) > 2 and row[0]
     }
 
     append_batch = [
         row for row in snapshot_rows
-        if (row[0], row[1]) not in existing_keys
+        if (row[0], row[2]) not in existing_keys
     ]
 
     if append_batch:
@@ -447,6 +448,7 @@ def write_post_data(sheet, history_sheet, followers_total):
 
         history_rows.append([
             media_id,
+            posted_date_str,
             today_str,
             like_count,
             comments_count,
