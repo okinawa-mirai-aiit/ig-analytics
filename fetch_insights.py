@@ -342,7 +342,11 @@ def write_account_data(sheet, followers_total):
 # --- 投稿の日次スナップショットを post_history に追記 ---
 def write_post_history(history_sheet, snapshot_rows):
     """post_id + snapshot_date の組で当日分をすでに記録済みならスキップし、
-    重複行が積み上がらないようにする(手動再実行/1日複数回実行への対策)。"""
+    重複行が積み上がらないようにする(手動再実行/1日複数回実行への対策)。
+    days_since_post(H列)はPythonで計算した静的な値ではなく、シート上の
+    数式 "=C{row}-B{row}"(取得日-投稿日)として書き込む。こうすることで
+    タイムスタンプのパース失敗などがあっても空白にならず、常にB列・C列
+    から自動計算される。"""
     existing = history_sheet.get_all_values()
     existing_keys = {
         (row[0], row[2]) for row in existing[1:] if len(row) > 2 and row[0]
@@ -354,10 +358,14 @@ def write_post_history(history_sheet, snapshot_rows):
     ]
 
     if append_batch:
+        start_row = len(existing) + 1
+        for i, row in enumerate(append_batch):
+            sheet_row = start_row + i
+            row[-1] = f"=C{sheet_row}-B{sheet_row}"
         history_sheet.append_rows(append_batch, value_input_option="USER_ENTERED")
 
     skipped = len(snapshot_rows) - len(append_batch)
-    print(f"post_history: 新規{len(append_batch)}件を追記(本日分の重複{skipped}件はスキップ)")
+    print(f"post_history: 新規{len(append_batch)}件を追記(本日分の重複{skipped}件はスキップ、days_since_postは数式で計算)")
 
 
 # --- 投稿データ書き込み ---
@@ -437,14 +445,9 @@ def write_post_data(sheet, history_sheet, followers_total):
             append_batch.append(row_data)
 
         # --- post_history 用スナップショット行を作成 ---
+        # days_since_post(最後の要素)はここではプレースホルダとし、
+        # write_post_history側でシート数式 "=C-B" として埋める。
         posted_date_str = media.get("timestamp", "")[:10]
-        days_since_post = ""
-        if posted_date_str:
-            try:
-                posted_date = datetime.fromisoformat(posted_date_str).date()
-                days_since_post = (datetime.now(timezone.utc).date() - posted_date).days
-            except ValueError:
-                days_since_post = ""
 
         history_rows.append([
             media_id,
@@ -454,7 +457,7 @@ def write_post_data(sheet, history_sheet, followers_total):
             comments_count,
             reach,
             saved,
-            days_since_post,
+            "",
         ])
 
     if update_batch:
