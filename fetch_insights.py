@@ -253,7 +253,14 @@ def write_account_data(sheet, followers_total):
     clear_range_end = max(len(existing), len(all_rows) + 1)
     sheet.batch_clear([f"A2:D{clear_range_end}"])
     if all_rows:
-        sheet.update(range_name=f"A2:D{len(all_rows) + 1}", values=all_rows)
+        # value_input_option="USER_ENTERED" を指定し、"YYYY-MM-DD"文字列を
+        # スプレッドシート上で日付型として認識させる(文字列型のままだと
+        # Looker Studio側で日付として正しくソート・表示できないため)
+        sheet.update(
+            range_name=f"A2:D{len(all_rows) + 1}",
+            values=all_rows,
+            value_input_option="USER_ENTERED",
+        )
 
     print(f"アカウントデータ: 対象{len(new_rows)}日分を書き込み(同日重複削除後、合計{len(all_rows)}行)")
 
@@ -333,9 +340,9 @@ def write_post_data(sheet, followers_total):
             append_batch.append(row_data)
 
     if update_batch:
-        sheet.batch_update(update_batch)
+        sheet.batch_update(update_batch, value_input_option="USER_ENTERED")
     if append_batch:
-        sheet.append_rows(append_batch)
+        sheet.append_rows(append_batch, value_input_option="USER_ENTERED")
 
     print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
 
@@ -347,7 +354,12 @@ def write_post_data(sheet, followers_total):
         data_rows.sort(key=lambda r: r[1] if len(r) > 1 else "", reverse=True)
         data_rows = [(r + [""] * 9)[:9] for r in data_rows]
         sheet.batch_clear([f"A2:I{len(all_values)}"])
-        sheet.update(range_name=f"A2:I{len(data_rows) + 1}", values=data_rows)
+        # timestamp列("YYYY-MM-DD HH:MM:SS")も日付型として認識させる
+        sheet.update(
+            range_name=f"A2:I{len(data_rows) + 1}",
+            values=data_rows,
+            value_input_option="USER_ENTERED",
+        )
         print(f"post_data を timestamp 降順でソートしました ({len(data_rows)}行)")
 
 
