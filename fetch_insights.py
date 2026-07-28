@@ -26,7 +26,7 @@ POST_HEADERS = [
     "post_id / 投稿ID",
     "timestamp / 投稿日時",
     "media_type / 投稿タイプ",
-    "caption / キャプション(先頭50文字)",
+    "caption / キャプション(先頭200文字)",
     "like_count / いいね数",
     "comments_count / コメント数",
     "reach / リーチ数",
@@ -355,7 +355,7 @@ def write_post_data(sheet, followers_total):
             engagement_rate = ""
 
         raw_caption = media.get("caption", "") or ""
-        caption_body = raw_caption[:50] if raw_caption else ""
+        caption_body = raw_caption[:200] if raw_caption else ""
 
         collab_username = media.get("username")
         if collab_username and collab_username in COLLAB_USERNAMES:
