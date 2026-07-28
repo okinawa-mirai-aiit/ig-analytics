@@ -34,6 +34,18 @@ POST_HEADERS = [
     "engagement_rate / エンゲージメント率(%)",
 ]
 
+# --- 投稿の日次スナップショット(伸びの速さを追うための時系列データ) ---
+POST_HISTORY_SHEET_NAME = "post_history"
+POST_HISTORY_HEADERS = [
+    "post_id / 投稿ID",
+    "snapshot_date / 取得日",
+    "like_count / いいね数",
+    "comments_count / コメント数",
+    "reach / リーチ数",
+    "saved / 保存数",
+    "days_since_post / 投稿からの経過日数",
+]
+
 
 # --- Google Sheets 認証 ---
 def get_spreadsheet():
@@ -42,6 +54,22 @@ def get_spreadsheet():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID)
+
+
+# --- ワークシート取得(存在しなければヘッダー付きで新規作成) ---
+def get_or_create_worksheet(spreadsheet, title, headers):
+    try:
+        sheet = spreadsheet.worksheet(title)
+    except gspread.exceptions.WorksheetNotFound:
+        print(f"[DEBUG] シート '{title}' が存在しないため新規作成します")
+        sheet = spreadsheet.add_worksheet(title=title, rows=2000, cols=len(headers))
+        sheet.insert_row(headers, 1)
+        return sheet
+
+    existing = sheet.get_all_values()
+    if not existing or not existing[0] or existing[0][0] != headers[0]:
+        sheet.insert_row(headers, 1)
+    return sheet
 
 
 # --- アカウントインサイト取得 ---
@@ -310,8 +338,29 @@ def write_account_data(sheet, followers_total):
     print(f"アカウントデータ: 対象{len(new_rows)}日分を書き込み(同日重複削除後、合計{len(all_rows)}行)")
 
 
+# --- 投稿の日次スナップショットを post_history に追記 ---
+def write_post_history(history_sheet, snapshot_rows):
+    """post_id + snapshot_date の組で当日分をすでに記録済みならスキップし、
+    重複行が積み上がらないようにする(手動再実行/1日複数回実行への対策)。"""
+    existing = history_sheet.get_all_values()
+    existing_keys = {
+        (row[0], row[1]) for row in existing[1:] if len(row) > 1 and row[0]
+    }
+
+    append_batch = [
+        row for row in snapshot_rows
+        if (row[0], row[1]) not in existing_keys
+    ]
+
+    if append_batch:
+        history_sheet.append_rows(append_batch, value_input_option="USER_ENTERED")
+
+    skipped = len(snapshot_rows) - len(append_batch)
+    print(f"post_history: 新規{len(append_batch)}件を追記(本日分の重複{skipped}件はスキップ)")
+
+
 # --- 投稿データ書き込み ---
-def write_post_data(sheet, followers_total):
+def write_post_data(sheet, history_sheet, followers_total):
     media_list = fetch_media_list()
     tagged_list = fetch_tagged_media()
 
@@ -335,6 +384,8 @@ def write_post_data(sheet, followers_total):
 
     update_batch = []
     append_batch = []
+    history_rows = []
+    today_str = datetime.now(timezone.utc).date().isoformat()
 
     for media in unique_media:
         media_id = media["id"]
@@ -384,12 +435,36 @@ def write_post_data(sheet, followers_total):
         else:
             append_batch.append(row_data)
 
+        # --- post_history 用スナップショット行を作成 ---
+        posted_date_str = media.get("timestamp", "")[:10]
+        days_since_post = ""
+        if posted_date_str:
+            try:
+                posted_date = datetime.fromisoformat(posted_date_str).date()
+                days_since_post = (datetime.now(timezone.utc).date() - posted_date).days
+            except ValueError:
+                days_since_post = ""
+
+        history_rows.append([
+            media_id,
+            today_str,
+            like_count,
+            comments_count,
+            reach,
+            saved,
+            days_since_post,
+        ])
+
     if update_batch:
         sheet.batch_update(update_batch, value_input_option="USER_ENTERED")
     if append_batch:
         sheet.append_rows(append_batch, value_input_option="USER_ENTERED")
 
     print(f"投稿データ: 新規{len(append_batch)}件 / 更新{len(update_batch)}件")
+
+    # post_history に日次スナップショットを追記(伸びの速さ計算用)
+    if history_rows:
+        write_post_history(history_sheet, history_rows)
 
     # timestamp列(B列)で降順ソート、常に新しい投稿が一番上に来るようにする
     time.sleep(2)
@@ -413,9 +488,12 @@ def main():
     spreadsheet = get_spreadsheet()
     raw_sheet = spreadsheet.worksheet("raw_data")
     post_sheet = spreadsheet.worksheet("post_data")
+    history_sheet = get_or_create_worksheet(
+        spreadsheet, POST_HISTORY_SHEET_NAME, POST_HISTORY_HEADERS
+    )
     followers_total = fetch_followers()
     write_account_data(raw_sheet, followers_total)
-    write_post_data(post_sheet, followers_total)
+    write_post_data(post_sheet, history_sheet, followers_total)
 
 
 if __name__ == "__main__":
