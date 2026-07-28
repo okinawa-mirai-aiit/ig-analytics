@@ -1,4 +1,4 @@
-<![CDATA[import os
+import os
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -420,4 +420,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-]]>
