@@ -20,8 +20,8 @@ ACCOUNT_HEADERS = [
     "reach / リーチ数",
     "follower_count_delta / フォロワー増減",
     "followers_total / フォロワー総数",
-    "reach_28d / リーチ数(過去28日・公式値)",
-    "views_28d / 閲覧数(過去28日・公式値)",
+    "reach_28d / 重複除去済みリーチ数(過去28日)",
+    "views_28d / 閲覧数(過去28日)",
 ]
 
 POST_HEADERS = [
@@ -73,6 +73,30 @@ def get_or_create_worksheet(spreadsheet, title, headers):
     if not existing or not existing[0] or existing[0][0] != headers[0]:
         sheet.insert_row(headers, 1)
     return sheet
+
+
+# --- ヘッダー行を最新のヘッダー定義に強制同期 ---
+# 列追加や列名変更があった場合に、既存シートのヘッダー行を最新のヘッダー
+# 定義(ACCOUNT_HEADERS等)に上書きする。既存の内容がそのまま残っていて
+# もOK(sheet.update() は行を追加せず値のみ差し替えるため、
+# insert_row のようにデータ行を1つ下にずらす副作用がない)。
+def sync_headers(sheet, headers):
+    existing = sheet.get_all_values()
+    current_header = existing[0] if existing else []
+    # 一致していれば何もしない(APIコール節約)
+    if current_header[: len(headers)] == headers and len(current_header) >= len(headers):
+        return
+
+    if not existing:
+        # 完全に空のシート → ヘッダー行を挿入
+        sheet.insert_row(headers, 1)
+        print(f"[DEBUG] ヘッダー行を新規挿入: {headers}")
+        return
+
+    # A1 から最終列までのヘッダーを上書き
+    last_col = chr(ord("A") + len(headers) - 1)
+    sheet.update(range_name=f"A1:{last_col}1", values=[headers])
+    print(f"[DEBUG] ヘッダー行を更新: {headers}")
 
 
 # --- アカウントインサイト取得(日別、グラフの推移表示用) ---
@@ -330,10 +354,10 @@ def write_account_data(sheet, followers_total, reach_28d, views_28d):
 
     print(f"[DEBUG] data_by_date: {data_by_date}")
 
+    # ヘッダー行を最新のACCOUNT_HEADERSに強制同期
+    # (列名変更・列追加をシート側に反映するため)
+    sync_headers(sheet, ACCOUNT_HEADERS)
     existing = sheet.get_all_values()
-    if not existing or not existing[0] or existing[0][0] != "date / 日付":
-        sheet.insert_row(ACCOUNT_HEADERS, 1)
-        existing = sheet.get_all_values()
 
     # 当日は集計未完了のため除外
     today_utc = datetime.now(timezone.utc).date().isoformat()
