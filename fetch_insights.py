@@ -21,6 +21,7 @@ ACCOUNT_HEADERS = [
     "follower_count_delta / フォロワー増減",
     "followers_total / フォロワー総数",
     "reach_28d / リーチ数(過去28日・公式値)",
+    "views_28d / 閲覧数(過去28日・公式値)",
 ]
 
 POST_HEADERS = [
@@ -112,6 +113,42 @@ def fetch_account_reach_28d():
     data = res.json().get("data", [])
     if data and data[0].get("values"):
         return data[0]["values"][0].get("value", "")
+    return ""
+
+
+# --- 過去28日間の閲覧数(views)取得 ---
+# viewsメトリクスは v22.0以降 metric_type=total_value でのみ取得可能で、
+# 日別の内訳(time_series)は返らない(APIの仕様)。そのため、
+# since/untilで28日間のウィンドウを指定して合計値を1件だけ取得する。
+# これはBusiness Suiteの「閲覧数」(Instagramタブ)と一致する値。
+def fetch_account_views_28d():
+    url = f"https://graph.facebook.com/v25.0/{IG_ACCOUNT_ID}/insights"
+    now = datetime.now(timezone.utc)
+    until_ts = int(now.timestamp())
+    since_ts = int((now - timedelta(days=28)).timestamp())
+    params = {
+        "metric": "views",
+        "metric_type": "total_value",
+        "period": "day",
+        "since": since_ts,
+        "until": until_ts,
+        "access_token": ACCESS_TOKEN,
+    }
+    res = requests.get(url, params=params)
+    print(f"[DEBUG] views(28d total_value) status: {res.status_code}")
+    if res.status_code != 200:
+        print(f"[DEBUG] views(28d) failed: {res.text[:200]}")
+        return ""
+    data = res.json().get("data", [])
+    if not data:
+        return ""
+    # metric_type=total_valueの場合、値は data[0]["total_value"]["value"] に入る
+    entry = data[0]
+    if "total_value" in entry:
+        return entry["total_value"].get("value", "")
+    # 念のためのフォールバック: 一部の環境で values 形式で返るケース
+    if entry.get("values"):
+        return entry["values"][0].get("value", "")
     return ""
 
 
@@ -276,7 +313,7 @@ def fetch_media_insights(media_id, media_type):
 
 
 # --- アカウントデータ書き込み ---
-def write_account_data(sheet, followers_total, reach_28d):
+def write_account_data(sheet, followers_total, reach_28d, views_28d):
     insights = fetch_account_insights()
     data_by_date = {}
     for metric in insights:
@@ -325,16 +362,20 @@ def write_account_data(sheet, followers_total, reach_28d):
         d = data_by_date[date_str]
 
         # 最新日のみ実値、それ以外は既存値を維持(空文字で潰さない)
+        # reach_28d(E列)/ views_28d(F列)も同様、最新日のみ当日取得値を入れる
         if date_str == sorted_dates[-1]:
             total = followers_total
             reach28 = reach_28d
+            views28 = views_28d
         elif date_str in existing_by_date:
             prev_row = existing_by_date[date_str]
             total = prev_row[3] if len(prev_row) > 3 else ""
             reach28 = prev_row[4] if len(prev_row) > 4 else ""
+            views28 = prev_row[5] if len(prev_row) > 5 else ""
         else:
             total = ""
             reach28 = ""
+            views28 = ""
 
         row_data = [
             date_str,
@@ -342,23 +383,24 @@ def write_account_data(sheet, followers_total, reach_28d):
             d.get("follower_count", ""),
             total,
             reach28,
+            views28,
         ]
         new_rows.append(row_data)
 
     # 削除後の既存行 + 新規/更新行をまとめて date 昇順で並べ直す
     all_rows = remaining_rows + new_rows
     all_rows.sort(key=lambda r: r[0])
-    all_rows = [(r + [""] * 5)[:5] for r in all_rows]
+    all_rows = [(r + [""] * 6)[:6] for r in all_rows]
 
     # 既存範囲を一旦クリアしてから、重複のない状態で全行を書き込み直す
     clear_range_end = max(len(existing), len(all_rows) + 1)
-    sheet.batch_clear([f"A2:E{clear_range_end}"])
+    sheet.batch_clear([f"A2:F{clear_range_end}"])
     if all_rows:
         # value_input_option="USER_ENTERED" を指定し、"YYYY-MM-DD"文字列を
         # スプレッドシート上で日付型として認識させる(文字列型のままだと
         # Looker Studio側で日付として正しくソート・表示できないため)
         sheet.update(
-            range_name=f"A2:E{len(all_rows) + 1}",
+            range_name=f"A2:F{len(all_rows) + 1}",
             values=all_rows,
             value_input_option="USER_ENTERED",
         )
@@ -525,7 +567,8 @@ def main():
     )
     followers_total = fetch_followers()
     reach_28d = fetch_account_reach_28d()
-    write_account_data(raw_sheet, followers_total, reach_28d)
+    views_28d = fetch_account_views_28d()
+    write_account_data(raw_sheet, followers_total, reach_28d, views_28d)
     write_post_data(post_sheet, history_sheet, followers_total)
 
 
